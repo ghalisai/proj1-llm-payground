@@ -1,0 +1,16 @@
+boto3
+langchain
+langgraph
+langchain-core
+python-dotenv
+langchain-openai
+openai
+pypdf
+langchain-community
+psycopg2-binary
+arxiv
+feedparser
+pymupdf
+faiss-cpu
+chromadb
+fastapi[standard]
