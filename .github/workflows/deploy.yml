@@ -1,21 +1,20 @@
 # Build backend/frontend images, push to ECR, roll ECS Fargate services.
+# Auth: IAM user access keys (not OIDC).
 #
-# GitHub → Settings → Secrets and variables → Actions → Variables:
+# GitHub → Settings → Secrets and variables → Actions → Secrets:
+#   AWS_ACCESS_KEY_ID
+#   AWS_SECRET_ACCESS_KEY
+#
+# Same names as Variables or Secrets (vars first, then secrets):
 #   AWS_REGION          e.g. us-east-1
-#   AWS_ROLE_ARN        IAM role ARN for GitHub OIDC
 #   ECR_API             ACCOUNT.dkr.ecr.REGION.amazonaws.com/llm-playground-api
 #   ECR_WEB             ACCOUNT.dkr.ecr.REGION.amazonaws.com/llm-playground-web
 #   ECS_CLUSTER         e.g. llm-playground
 #   ECS_SERVICE_API     e.g. api
 #   ECS_SERVICE_WEB     e.g. web
 #   VITE_API_URL        public API origin, no trailing slash
-#                       e.g. http://your-alb-123.us-east-1.elb.amazonaws.com
 #
-# IAM role needs ECR push + ecs:UpdateService (and DescribeServices).
 # OPENROUTER_API_KEY stays in AWS Secrets Manager on the API task, not here.
-#
-# Task definitions should use image :latest (this workflow retags and
-# force-deploys). Prefer pinning :${{ github.sha }} in the task def later.
 
 name: Deploy to ECS
 
@@ -25,11 +24,10 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write
   contents: read
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_REGION: ${{ vars.AWS_REGION || secrets.AWS_REGION }}
 
 jobs:
   deploy-api:
@@ -39,10 +37,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
@@ -78,10 +77,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
@@ -94,7 +94,7 @@ jobs:
           VITE_API_URL: ${{ vars.VITE_API_URL }}
         run: |
           if [ -z "$VITE_API_URL" ]; then
-            echo "Set GitHub variable VITE_API_URL to the public API origin."
+            echo "Set VITE_API_URL (variable or secret) to the public API origin."
             exit 1
           fi
           docker build \
