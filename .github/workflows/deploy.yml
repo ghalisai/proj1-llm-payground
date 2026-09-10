@@ -1,0 +1,119 @@
+# Build backend/frontend images, push to ECR, roll ECS Fargate services.
+#
+# GitHub → Settings → Secrets and variables → Actions → Variables:
+#   AWS_REGION          e.g. us-east-1
+#   AWS_ROLE_ARN        IAM role ARN for GitHub OIDC
+#   ECR_API             ACCOUNT.dkr.ecr.REGION.amazonaws.com/llm-playground-api
+#   ECR_WEB             ACCOUNT.dkr.ecr.REGION.amazonaws.com/llm-playground-web
+#   ECS_CLUSTER         e.g. llm-playground
+#   ECS_SERVICE_API     e.g. api
+#   ECS_SERVICE_WEB     e.g. web
+#   VITE_API_URL        public API origin, no trailing slash
+#                       e.g. http://your-alb-123.us-east-1.elb.amazonaws.com
+#
+# IAM role needs ECR push + ecs:UpdateService (and DescribeServices).
+# OPENROUTER_API_KEY stays in AWS Secrets Manager on the API task, not here.
+#
+# Task definitions should use image :latest (this workflow retags and
+# force-deploys). Prefer pinning :${{ github.sha }} in the task def later.
+
+name: Deploy to ECS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+
+jobs:
+  deploy-api:
+    name: API → ECR → ECS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push API image
+        working-directory: backend
+        env:
+          ECR_API: ${{ vars.ECR_API }}
+        run: |
+          docker build -t "$ECR_API:${{ github.sha }}" -t "$ECR_API:latest" .
+          docker push "$ECR_API:${{ github.sha }}"
+          docker push "$ECR_API:latest"
+
+      - name: Deploy API service
+        env:
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_SERVICE_API: ${{ vars.ECS_SERVICE_API }}
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE_API" \
+            --force-new-deployment
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE_API"
+
+  deploy-web:
+    name: Frontend → ECR → ECS
+    runs-on: ubuntu-latest
+    needs: deploy-api
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push web image
+        working-directory: frontend
+        env:
+          ECR_WEB: ${{ vars.ECR_WEB }}
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+        run: |
+          if [ -z "$VITE_API_URL" ]; then
+            echo "Set GitHub variable VITE_API_URL to the public API origin."
+            exit 1
+          fi
+          docker build \
+            --build-arg "VITE_API_URL=$VITE_API_URL" \
+            -t "$ECR_WEB:${{ github.sha }}" \
+            -t "$ECR_WEB:latest" \
+            .
+          docker push "$ECR_WEB:${{ github.sha }}"
+          docker push "$ECR_WEB:latest"
+
+      - name: Deploy web service
+        env:
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_SERVICE_WEB: ${{ vars.ECS_SERVICE_WEB }}
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE_WEB" \
+            --force-new-deployment
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE_WEB"
