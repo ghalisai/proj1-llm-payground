@@ -41,6 +41,7 @@ app = FastAPI(
 origins = [
     "http://localhost",
     "http://localhost:5173",
+    "http://llm-playground-alb-123456789.us-east-1.elb.amazonaws.com",
 ]
 
 app.add_middleware(
